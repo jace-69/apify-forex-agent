@@ -1,0 +1,1 @@
+# apify-forex-agent
