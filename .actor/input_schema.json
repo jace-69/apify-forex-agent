@@ -2,30 +2,29 @@
     "title": "Forex Market AI Sentiment",
     "description": "Analyzes global news using Google Gemini to produce a Real-Time Trading Signal.",
     "type": "object",
-    "schema": {
-        "properties": {
-            "forexPair": {
-                "title": "Forex Symbol",
-                "type": "string",
-                "description": "e.g., EURUSD, BTCUSD, GOLD",
-                "default": "EURUSD",
-                "editor": "textfield"
-            },
-            "geminiApiKey": {
-                "title": "Gemini API Key",
-                "type": "string",
-                "description": "Get free key: https://aistudio.google.com/",
-                "editor": "textfield",
-                "isSecret": true
-            },
-            "hoursLookback": {
-                "title": "News Timeframe (Hours)",
-                "type": "integer",
-                "default": 24,
-                "minimum": 1,
-                "maximum": 72
-            }
+    "schemaVersion": 1,
+    "properties": {
+        "forexPair": {
+            "title": "Forex Symbol",
+            "type": "string",
+            "description": "e.g., EURUSD, BTCUSD, GOLD",
+            "default": "EURUSD",
+            "editor": "textfield"
         },
-        "required": ["forexPair", "geminiApiKey"]
-    }
+        "geminiApiKey": {
+            "title": "Gemini API Key",
+            "type": "string",
+            "description": "Get free key: https://aistudio.google.com/",
+            "editor": "textfield",
+            "isSecret": true
+        },
+        "hoursLookback": {
+            "title": "News Timeframe (Hours)",
+            "type": "integer",
+            "default": 24,
+            "minimum": 1,
+            "maximum": 72
+        }
+    },
+    "required": ["forexPair", "geminiApiKey"]
 }
