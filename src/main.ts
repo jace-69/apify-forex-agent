@@ -58,27 +58,38 @@ try {
         `;
 
         // 4. CALL AI & CLEAN OUTPUT
-        const result = await model.generateContent(prompt);
-        let text = result.response.text();
-        
-        // Remove markdown formatting if Gemini adds it
-        text = text.replace(/```json/g, '').replace(/```/g, '').trim();
-        
-        const aiData = JSON.parse(text);
+        // ... inside src/main.ts
 
-        // 5. SAVE RESULT
-        await Actor.pushData({
-            timestamp: new Date().toISOString(),
-            pair: PAIR,
-            ...aiData,
-            news_source_count: feed.items.length,
-            top_headlines: feed.items.slice(0, 5).map(x => x.title)
-        });
+    console.log('🧠 Sending context to Gemini AI...');
+    
+    // Create a summarized context for the LLM
+    const headlines = feed.items.slice(0, 20).map((item, i) => `${i + 1}. ${item.title}`).join('\n');
+    
+    const genAI = new GoogleGenerativeAI(input!.geminiApiKey);
+    
+    // --- FIX IS HERE: Switched to 'gemini-pro' for maximum stability ---
+    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+    // -------------------------------------------------------------------
 
-        console.log(`🎉 Analysis Success: ${aiData.trend_outlook}`);
+    const prompt = `
+    Role: Professional Forex Analyst.
+    Task: Analyze the market sentiment for ${PAIR} based on these headlines:
+    ---
+    ${headlines}
+    ---
+    Output Requirements: 
+    Return strictly raw JSON (no markdown formatting).
+    JSON Keys:
+    - sentiment_score: Number (-10 to 10)
+    - trend: String ("Bullish", "Bearish", "Neutral")
+    - key_driver: String (Main reason)
+    - summary: String (Concise analysis)
+    `;
+
+    // ... rest of the code stays the same
+
     }
-
-} catch (error) {
+ catch (error) {
     console.error('Processing failed:', error);
     // Cast error to 'any' or 'Error' to access message safely
     const errorMessage = error instanceof Error ? error.message : String(error);
