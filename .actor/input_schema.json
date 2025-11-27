@@ -7,20 +7,21 @@
         "forexPair": {
             "title": "Forex Symbol",
             "type": "string",
-            "description": "e.g., EURUSD, BTCUSD, GOLD",
-            "default": "EURUSD",
+            "description": "The Forex Pair or Asset symbol to analyze (e.g., XAUUSD, EURUSD, BTCUSD).",
+            "default": "XAUUSD",
             "editor": "textfield"
         },
         "geminiApiKey": {
             "title": "Gemini API Key",
             "type": "string",
-            "description": "Get free key: https://aistudio.google.com/",
+            "description": "Your Google Gemini API Key. Required for AI analysis. Get one free at aistudio.google.com.",
             "editor": "textfield",
             "isSecret": true
         },
         "hoursLookback": {
             "title": "News Timeframe (Hours)",
             "type": "integer",
+            "description": "How many hours of past news to analyze? Higher numbers = more context but slower processing.",
             "default": 24,
             "minimum": 1,
             "maximum": 72
