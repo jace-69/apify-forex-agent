@@ -8,92 +8,99 @@ interface Input {
     hoursLookback?: number;
 }
 
-await Actor.init();
+// Wrap everything in a main function to safely handle async top-level
+const main = async () => {
+    await Actor.init();
 
-// 1. INPUT HANDLING
-const input = await Actor.getInput<Input>();
-if (!input?.geminiApiKey) { 
-    await Actor.fail('❌ Error: Missing Gemini API Key in input.'); 
-}
+    // 1. SETUP & VALIDATION
+    const input = await Actor.getInput<Input>();
+    if (!input?.geminiApiKey) {
+        await Actor.fail('❌ Configuration Error: Gemini API Key is missing.');
+    }
 
-const PAIR = (input?.forexPair || 'XAUUSD').toUpperCase();
-const HOURS = input?.hoursLookback || 24;
+    const PAIR = (input?.forexPair || 'XAUUSD').toUpperCase();
+    const HOURS = input?.hoursLookback || 24;
 
-console.log(`🚀 Starting Analysis for ${PAIR} (Last ${HOURS} hours)...`);
+    console.log(`🚀 AI Agent analyzing sentiment for: ${PAIR} (Last ${HOURS}h)`);
 
-// 2. RSS NEWS FETCHING
-const rssUrl = `https://news.google.com/rss/search?q=${PAIR}+when:${HOURS}h&hl=en-US&gl=US&ceid=US:en`;
-const parser = new Parser();
+    // 2. FETCH NEWS (via RSS to bypass blockers)
+    const rssUrl = `https://news.google.com/rss/search?q=${PAIR}+when:${HOURS}h&hl=en-US&gl=US&ceid=US:en`;
+    const parser = new Parser();
+    let feed;
 
-try {
-    const feed = await parser.parseURL(rssUrl);
-    
-    if (!feed.items || feed.items.length === 0) {
-        console.log('⚠️ No news found for this timeframe.');
-        await Actor.pushData({ message: "No news found", pair: PAIR });
-    } else {
-        console.log(`✅ Found ${feed.items.length} news items. Sending to AI...`);
+    try {
+        feed = await parser.parseURL(rssUrl);
+        console.log(`✅ Collected ${feed.items.length} news articles.`);
+    } catch (e) {
+        console.error('RSS Error:', e);
+        await Actor.fail('Failed to fetch news feed.');
+        return; // Stop execution if no news
+    }
 
-        // 3. PREPARE AI PROMPT
-        const genAI = new GoogleGenerativeAI(input!.geminiApiKey);
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    // 3. AI ANALYSIS (Using Stable Gemini Pro)
+    if (feed && feed.items.length > 0) {
+        console.log('🧠 Sending context to Gemini AI...');
         
-        // Context: Top 15 headlines
-        const headlines = feed.items.slice(0, 15)
-            .map((item, index) => `${index + 1}. ${item.title}`)
-            .join('\n');
+        // Create a summarized context for the LLM
+        const headlines = feed.items.slice(0, 20).map((item, i) => `${i + 1}. ${item.title}`).join('\n');
+        
+        const genAI = new GoogleGenerativeAI(input!.geminiApiKey);
+        
+        // --- USING STABLE MODEL ---
+        const model = genAI.getGenerativeModel({ model: "gemini-pro" });
 
         const prompt = `
-            Act as a Senior Forex Analyst. Analyze the sentiment for: ${PAIR}.
-            
-            Headlines:
-            ${headlines}
-            
-            Strictly Output a JSON object (NO Markdown, NO \`\`\`json tags) with this structure:
-            {
-                "sentiment_score": (number -10 to 10),
-                "trend_outlook": "Bullish/Bearish/Neutral",
-                "summary": "One sentence summary of drivers"
-            }
+        Role: Professional Forex Analyst.
+        Task: Analyze the market sentiment for ${PAIR} based on these headlines:
+        ---
+        ${headlines}
+        ---
+        Output Requirements: 
+        Return strictly raw JSON (no markdown formatting, no code blocks).
+        JSON Keys:
+        - sentiment_score: Number (-10 to 10)
+        - trend: String ("Bullish", "Bearish", "Neutral")
+        - key_driver: String (Main reason)
+        - summary: String (Concise analysis)
         `;
 
-        // 4. CALL AI & CLEAN OUTPUT
-        // ... inside src/main.ts
+        try {
+            const result = await model.generateContent(prompt);
+            const responseText = result.response.text();
+            
+            // Clean markdown backticks if AI adds them
+            const text = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
+            
+            let analysis;
+            try {
+                analysis = JSON.parse(text);
+            } catch (jsonError) {
+                console.error("JSON Parse failed, saving raw text:", text);
+                analysis = { trend: "Unknown", summary: text };
+            }
 
-    console.log('🧠 Sending context to Gemini AI...');
-    
-    // Create a summarized context for the LLM
-    const headlines = feed.items.slice(0, 20).map((item, i) => `${i + 1}. ${item.title}`).join('\n');
-    
-    const genAI = new GoogleGenerativeAI(input!.geminiApiKey);
-    
-    // --- FIX IS HERE: Switched to 'gemini-pro' for maximum stability ---
-    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
-    // -------------------------------------------------------------------
+            // 4. OUTPUT TO DATASET (The winning payload)
+            await Actor.pushData({
+                timestamp: new Date().toISOString(),
+                pair: PAIR,
+                ...analysis,
+                source_count: feed.items.length,
+                top_articles: feed.items.slice(0, 3).map(i => i.title)
+            });
+            
+            console.log(`🎉 Success! Sentiment: ${analysis.trend} (${analysis.sentiment_score}/10)`);
 
-    const prompt = `
-    Role: Professional Forex Analyst.
-    Task: Analyze the market sentiment for ${PAIR} based on these headlines:
-    ---
-    ${headlines}
-    ---
-    Output Requirements: 
-    Return strictly raw JSON (no markdown formatting).
-    JSON Keys:
-    - sentiment_score: Number (-10 to 10)
-    - trend: String ("Bullish", "Bearish", "Neutral")
-    - key_driver: String (Main reason)
-    - summary: String (Concise analysis)
-    `;
-
-    // ... rest of the code stays the same
-
+        } catch (error) {
+            console.error('AI Error:', error);
+            await Actor.pushData({ error: 'AI processing failed', raw_headlines: headlines });
+        }
+    } else {
+        console.log('⚠️ No news found for this timeframe.');
+        await Actor.pushData({ message: 'No news found', pair: PAIR });
     }
- catch (error) {
-    console.error('Processing failed:', error);
-    // Cast error to 'any' or 'Error' to access message safely
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    await Actor.fail(`Analysis failed: ${errorMessage}`);
-}
 
-await Actor.exit();
+    await Actor.exit();
+};
+
+// Start the Actor
+main();
