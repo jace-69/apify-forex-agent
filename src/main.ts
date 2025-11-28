@@ -2,90 +2,81 @@ import { Actor } from 'apify';
 import Parser from 'rss-parser';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
-interface Input {
-    forexPair: string;
-    geminiApiKey: string;
-    hoursLookback?: number;
-}
-
 await Actor.init();
 
-// 1. SETUP & VALIDATION
-const input = await Actor.getInput<Input>();
-if (!input?.geminiApiKey) {
-    await Actor.fail('❌ Configuration Error: Gemini API Key is missing.');
-}
-
+// 1. SETUP
+const input = await Actor.getInput();
+const API_KEY = input?.geminiApiKey;
 const PAIR = (input?.forexPair || 'XAUUSD').toUpperCase();
 const HOURS = input?.hoursLookback || 24;
 
-console.log(`🚀 AI Agent analyzing sentiment for: ${PAIR} (Last ${HOURS}h)`);
-
-// 2. FETCH NEWS
-// We filter strictly for Google News Finance results
-const rssUrl = `https://news.google.com/rss/search?q=${PAIR}+when:${HOURS}h&hl=en-US&gl=US&ceid=US:en`;
-const parser = new Parser();
-let feed;
-
-try {
-    feed = await parser.parseURL(rssUrl);
-    console.log(`✅ Collected ${feed.items.length} news articles.`);
-} catch (e) {
-    console.error('RSS Error:', e);
-    await Actor.fail('Failed to fetch news feed.');
+if (!API_KEY) {
+    await Actor.fail('❌ Configuration Error: Gemini API Key is missing.');
 }
 
-// 3. AI ANALYSIS
-if (feed && feed.items.length > 0) {
-    console.log('🧠 Sending context to Gemini AI...');
-    
-    // Create a summarized context string
-    const headlines = feed.items.slice(0, 15).map((item, i) => `${i + 1}. ${item.title}`).join('\n');
-    
-    const genAI = new GoogleGenerativeAI(input!.geminiApiKey);
-    
-    // *** FIX: USING GEMINI 1.5 FLASH ***
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+console.log(`🚀 Analysis starting for: ${PAIR}`);
 
-    const prompt = `
-    Act as a senior Forex Analyst.
-    Analyze the sentiment for ${PAIR} based on these headlines:
-    ---
-    ${headlines}
-    ---
-    Return raw JSON with no markdown blocks:
-    {
-        "sentiment_score": (Number -10 to 10),
-        "outlook": (String "Bullish"/"Bearish"),
-        "reason": (String concise summary)
+// 2. RSS NEWS
+const rssUrl = `https://news.google.com/rss/search?q=${PAIR}+when:${HOURS}h&hl=en-US&gl=US&ceid=US:en`;
+const parser = new Parser();
+let feedItems = [];
+
+try {
+    const feed = await parser.parseURL(rssUrl);
+    feedItems = feed.items.slice(0, 20); // Take top 20
+    console.log(`✅ Collected ${feed.items.length} news articles.`);
+} catch (e) {
+    console.log(`⚠️ RSS Fetch failed: ${e.message}`);
+}
+
+// 3. AI ANALYSIS (WITH RETRY STRATEGY)
+if (feedItems.length > 0) {
+    const genAI = new GoogleGenerativeAI(API_KEY);
+    
+    // Create prompt
+    const context = feedItems.map((item, i) => `${i + 1}. ${item.title}`).join('\n');
+    const prompt = `Analyze Sentiment for ${PAIR}. Headlines:\n${context}\nReturn JSON: { "score": number (-10 to 10), "outlook": string, "summary": string }`;
+
+    let finalData = null;
+
+    // TRY LIST OF MODELS IN ORDER
+    const modelsToTry = ["gemini-1.5-flash-001", "gemini-1.5-flash", "gemini-pro"];
+    
+    for (const modelName of modelsToTry) {
+        try {
+            console.log(`Trying AI Model: ${modelName}...`);
+            const model = genAI.getGenerativeModel({ model: modelName });
+            const result = await model.generateContent(prompt);
+            const text = result.response.text().replace(/```json|```/g, '').trim();
+            finalData = JSON.parse(text);
+            finalData.model_used = modelName;
+            break; // Stop loop if successful
+        } catch (error) {
+            console.log(`⚠️ Model ${modelName} failed: ${error.message.split(']')[0]}]`);
+            // Continue to next model
+        }
     }
-    `;
 
-    try {
-        const result = await model.generateContent(prompt);
-        // Clean markdown backticks just in case
-        const text = result.response.text().replace(/```json/g, '').replace(/```/g, '').trim();
-        const analysis = JSON.parse(text);
-
+    if (finalData) {
+        console.log(`🎉 Success using ${finalData.model_used}! Sentiment: ${finalData.outlook}`);
         await Actor.pushData({
-            timestamp: new Date().toISOString(),
             pair: PAIR,
-            ...analysis,
-            news_volume: feed.items.length
+            timestamp: new Date().toISOString(),
+            ...finalData,
+            news: feedItems.map(x => x.title).slice(0, 5)
         });
-        
-        console.log(`🎉 Success! Market Outlook: ${analysis.outlook}`);
-
-    } catch (error: any) {
-        console.error('AI Error:', error.message);
-        // Fallback: Save the raw news so the user still gets value!
-        await Actor.pushData({ 
-            error: "AI Analysis failed, but here are the latest headlines.", 
-            latest_news: feed.items.slice(0,5).map(i => i.title) 
+    } else {
+        // FAIL GRACEFULLY - Output news only
+        console.log("❌ All AI models failed. Saving raw news data only.");
+        await Actor.pushData({
+            pair: PAIR,
+            error: "AI_GENERATION_FAILED",
+            message: "Check API Key permissions or quota.",
+            news_headlines: feedItems.map(x => x.title)
         });
     }
 } else {
-    console.log('⚠️ No news found.');
+    console.log('⚠️ No news found to analyze.');
 }
 
 await Actor.exit();
